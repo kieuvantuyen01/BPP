@@ -1,9 +1,11 @@
 from pysat.formula import CNF
-from pysat.solvers import Solver
+from pysat.solvers import Glucose3
 import sys
 import math
 from itertools import chain, combinations
+from threading import Timer
 
+class TimeoutException(Exception): pass
 # if len(sys.argv) < 2:
 #     print("Usage: python bin_packing.py inputFile [outputFile] [timeLimit]")
 #     sys.exit(1)
@@ -56,20 +58,42 @@ for k in range(nb_max_bins):
         cnf.append([-bins[k][i], bins_used[k]])  # If item i is in bin k, bin k is used
     cnf.append([bins[k][i] for i in range(nb_items)] + [-bins_used[k]])  # If bin k is used, there is at least one item in it
 
-# Minimize the number of used bins
-with Solver(bootstrap_with=cnf.clauses) as s:
-    for _ in range(nb_max_bins):
-        if s.solve(assumptions=[-bins_used[k] for k in range(nb_max_bins)]):
-            break
-        nb_max_bins -= 1
+print(cnf.clauses)
 
-# Write the solution in a file
-if len(sys.argv) >= 3:
-    with open(sys.argv[2], 'w') as f:
+# Minimize the number of used bins
+timeout = 60  # timeout in seconds
+
+def interrupt(solver):
+    solver.interrupt()
+
+with Glucose3(bootstrap_with=cnf.clauses, use_timer=True) as s:
+    timer = Timer(timeout, interrupt, [s])
+    timer.start()
+    try:
+        for _ in range(nb_max_bins):
+            result = s.solve(assumptions=[-bins_used[k] for k in range(nb_max_bins)])
+            print(result)
+            if result:
+                print("SAT")
+                timer.cancel()
+                break
+            else:
+                nb_max_bins -= 1
+        else:
+            print("UNSAT")
+        timer.cancel()
+    except TimeoutException:
+        print("Timeout")
+
+# Print solution to console
+if result:
+    print("Number of bins:", nb_max_bins)
+    model = s.get_model()
+    print(model)
+    if model is not None:
+        print("Bin assignment:")
         for k in range(nb_max_bins):
-            if s.model[bins_used[k]]:
-                f.write("Bin weight: %d | Items: " % sum(weights_data[i] for i in range(nb_items) if s.model[bins[k][i]]))
-                for i in range(nb_items):
-                    if s.model[bins[k][i]]:
-                        f.write("%d " % i)
-                f.write("\n")
+            print("Bin", k, ":", [i for i in range(nb_items) if model[bins[k][i] - 1] > 0])
+        print("Bin usage:", [k for k in range(nb_max_bins) if model[bins_used[k] - 1] > 0])
+
+
